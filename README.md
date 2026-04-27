@@ -1,5 +1,17 @@
 # Content Broadcasting System — Backend
 
+## Live Deployment
+
+| | |
+|---|---|
+| **API Base URL** | `https://content-broadcast-backend.onrender.com/api/v1` |
+| **Swagger Docs** | `https://content-broadcast-backend.onrender.com/api/v1/docs` |
+| **Health Check** | `https://content-broadcast-backend.onrender.com/health` |
+
+> **Note:** The service is hosted on Render's free tier. The first request after a period of inactivity may take **30–60 seconds** to respond while the instance spins up. Subsequent requests are fast.
+
+---
+
 ## Tech Stack
 - **Node.js** (ESM, `"type": "module"`)
 - **Express.js** — HTTP framework
@@ -41,8 +53,10 @@ npm run dev
 ```
 
 Server runs at: `http://localhost:5001`  
-Swagger docs at: `http://localhost:5001/api/v1/docs`  
+Swagger docs at: `https://content-broadcast-backend.onrender.com/api/v1/docs`  
 Health check: `http://localhost:5001/health`
+
+> For local testing replace `https://content-broadcast-backend.onrender.com` with `http://localhost:5001` in the examples below.
 
 ## Environment Variables
 
@@ -78,24 +92,24 @@ Health check: `http://localhost:5001/health`
 ### Auth
 ```bash
 # Register
-curl -X POST http://localhost:5001/api/v1/auth/register \
+curl -X POST https://content-broadcast-backend.onrender.com/api/v1/auth/register \
   -H "Content-Type: application/json" \
   -d '{"name":"Jane","email":"jane@school.com","password":"Test@1234","role":"TEACHER"}'
 
 # Login
-curl -X POST http://localhost:5001/api/v1/auth/login \
+curl -X POST https://content-broadcast-backend.onrender.com/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"teacher1@school.com","password":"Teacher@123"}'
 
 # Get current user
-curl http://localhost:5001/api/v1/auth/me \
+curl https://content-broadcast-backend.onrender.com/api/v1/auth/me \
   -H "Authorization: Bearer <token>"
 ```
 
 ### Content (Teacher)
 ```bash
 # Upload content (file goes directly to S3)
-curl -X POST http://localhost:5001/api/v1/content/upload \
+curl -X POST https://content-broadcast-backend.onrender.com/api/v1/content/upload \
   -H "Authorization: Bearer <teacher_token>" \
   -F "title=Maths Chapter 3" \
   -F "subject=maths" \
@@ -104,34 +118,34 @@ curl -X POST http://localhost:5001/api/v1/content/upload \
   -F "file=@/path/to/image.png"
 
 # List my content (supports ?status=APPROVED&subject=maths&page=1&limit=10)
-curl "http://localhost:5001/api/v1/content/my?status=PENDING&page=1" \
+curl "https://content-broadcast-backend.onrender.com/api/v1/content/my?status=PENDING&page=1" \
   -H "Authorization: Bearer <teacher_token>"
 
 # Get single content item
-curl http://localhost:5001/api/v1/content/<content_uuid> \
+curl https://content-broadcast-backend.onrender.com/api/v1/content/<content_uuid> \
   -H "Authorization: Bearer <teacher_token>"
 
 # Delete content
-curl -X DELETE http://localhost:5001/api/v1/content/<content_uuid> \
+curl -X DELETE https://content-broadcast-backend.onrender.com/api/v1/content/<content_uuid> \
   -H "Authorization: Bearer <teacher_token>"
 ```
 
 ### Approval (Principal)
 ```bash
 # List pending content (supports ?page=1&limit=10)
-curl http://localhost:5001/api/v1/approval/pending \
+curl https://content-broadcast-backend.onrender.com/api/v1/approval/pending \
   -H "Authorization: Bearer <principal_token>"
 
 # List all content (supports ?status=APPROVED&subject=maths&teacherId=<uuid>&page=1)
-curl "http://localhost:5001/api/v1/approval/all?status=PENDING" \
+curl "https://content-broadcast-backend.onrender.com/api/v1/approval/all?status=PENDING" \
   -H "Authorization: Bearer <principal_token>"
 
 # Approve
-curl -X PATCH http://localhost:5001/api/v1/approval/<content_uuid>/approve \
+curl -X PATCH https://content-broadcast-backend.onrender.com/api/v1/approval/<content_uuid>/approve \
   -H "Authorization: Bearer <principal_token>"
 
 # Reject (reason required)
-curl -X PATCH http://localhost:5001/api/v1/approval/<content_uuid>/reject \
+curl -X PATCH https://content-broadcast-backend.onrender.com/api/v1/approval/<content_uuid>/reject \
   -H "Authorization: Bearer <principal_token>" \
   -H "Content-Type: application/json" \
   -d '{"rejectionReason":"Image quality too low"}'
@@ -140,27 +154,27 @@ curl -X PATCH http://localhost:5001/api/v1/approval/<content_uuid>/reject \
 ### Schedule (Teacher)
 ```bash
 # Add approved content to the subject rotation
-curl -X POST http://localhost:5001/api/v1/schedule \
+curl -X POST https://content-broadcast-backend.onrender.com/api/v1/schedule \
   -H "Authorization: Bearer <teacher_token>" \
   -H "Content-Type: application/json" \
   -d '{"contentId":"<content_uuid>","duration":5,"rotationOrder":1}'
 
 # View rotation for a subject
-curl http://localhost:5001/api/v1/schedule/subject/maths \
+curl https://content-broadcast-backend.onrender.com/api/v1/schedule/subject/maths \
   -H "Authorization: Bearer <any_token>"
 
 # Remove from rotation
-curl -X DELETE http://localhost:5001/api/v1/schedule/<schedule_uuid> \
+curl -X DELETE https://content-broadcast-backend.onrender.com/api/v1/schedule/<schedule_uuid> \
   -H "Authorization: Bearer <teacher_token>"
 ```
 
 ### Public Live Broadcast (no auth required)
 ```bash
 # Currently active content for a teacher across all subjects
-curl http://localhost:5001/api/v1/content/live/<teacher_uuid>
+curl https://content-broadcast-backend.onrender.com/api/v1/content/live/<teacher_uuid>
 
 # Currently active content for a teacher, filtered to one subject
-curl http://localhost:5001/api/v1/content/live/<teacher_uuid>/maths
+curl https://content-broadcast-backend.onrender.com/api/v1/content/live/<teacher_uuid>/maths
 ```
 
 Response includes `secondsRemaining` — the number of seconds until the current slot ends and the next content item becomes active. Clients should re-poll after this interval.
