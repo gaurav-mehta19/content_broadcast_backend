@@ -1,0 +1,80 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  PRINCIPAL
+  TEACHER
+}
+
+enum ContentStatus {
+  UPLOADED
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model User {
+  id              String    @id @default(uuid())
+  name            String
+  email           String    @unique
+  passwordHash    String    @map("password_hash")
+  role            Role
+  createdAt       DateTime  @default(now()) @map("created_at")
+  uploadedContent Content[] @relation("UploadedBy")
+  approvedContent Content[] @relation("ApprovedBy")
+
+  @@map("users")
+}
+
+model Content {
+  id              String        @id @default(uuid())
+  title           String
+  description     String?
+  subject         String
+  filePath        String        @map("file_path")
+  fileType        String        @map("file_type")
+  fileSize        Int           @map("file_size")
+  uploadedById    String        @map("uploaded_by")
+  status          ContentStatus @default(PENDING)
+  rejectionReason String?       @map("rejection_reason")
+  approvedById    String?       @map("approved_by")
+  approvedAt      DateTime?     @map("approved_at")
+  startTime       DateTime?     @map("start_time")
+  endTime         DateTime?     @map("end_time")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  uploadedBy      User          @relation("UploadedBy", fields: [uploadedById], references: [id])
+  approvedBy      User?         @relation("ApprovedBy", fields: [approvedById], references: [id])
+  schedule        ContentSchedule?
+
+  @@index([subject, status])
+  @@index([uploadedById, status])
+  @@map("content")
+}
+
+model ContentSlot {
+  id        String            @id @default(uuid())
+  subject   String            @unique
+  createdAt DateTime          @default(now()) @map("created_at")
+  schedules ContentSchedule[]
+
+  @@map("content_slots")
+}
+
+model ContentSchedule {
+  id            String      @id @default(uuid())
+  contentId     String      @unique @map("content_id")
+  slotId        String      @map("slot_id")
+  rotationOrder Int         @map("rotation_order")
+  duration      Int
+  createdAt     DateTime    @default(now()) @map("created_at")
+  content       Content     @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  slot          ContentSlot @relation(fields: [slotId], references: [id])
+
+  @@map("content_schedules")
+}

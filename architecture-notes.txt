@@ -1,0 +1,189 @@
+CONTENT BROADCASTING SYSTEM — ARCHITECTURE NOTES
+=================================================
+
+1. AUTH / RBAC FLOW
+-------------------
+- Users register as TEACHER or PRINCIPAL (role is immutable after creation).
+- Login returns a signed JWT with payload { sub: userId, role }.
+- `authenticate` middleware (src/middlewares/auth.middleware.ts):
+    1. Extracts the Bearer token from Authorization header.
+    2. Calls verifyToken() — distinguishes TokenExpiredError (401 "Token expired")
+       from any other failure (401 "Invalid token").
+    3. Fetches the live User record from the DB and attaches it to req.user.
+       Fetching live ensures a deactivated user would be rejected; role in DB is authoritative.
+- `authorize(...roles)` middleware checks req.user.role against the allowed list and throws
+  403 if not matched. Used inline on each route, e.g. authorize('TEACHER').
+- Bcrypt rounds configurable via BCRYPT_ROUNDS env var (default 10).
+- No email enumeration: login returns 401 "Invalid credentials" for both unknown email
+  and wrong password.
+
+2. UPLOAD APPROACH
+------------------
+- Files are uploaded directly to AWS S3 using multer-s3 (src/config/multer.ts).
+- There is no local disk storage step; files never touch the server filesystem.
+- UUID-based S3 keys (uuid + original extension) prevent collisions and avoid
+  exposing original filenames.
+- File filter enforces MIME type against the ALLOWED_FILE_TYPES env var
+  (default: image/jpeg, image/png, image/gif); filter runs before any DB write.
+- Size limit enforced at Multer level via MAX_FILE_SIZE_MB env var (default 10MB);
+  multer LIMIT_FILE_SIZE errors are caught in uploadSingle() middleware wrapper and
+  converted to ApiError(400) so they flow through the global error handler cleanly.
+- The S3 object URL (.location from multer-s3) is stored as filePath in the content row.
+  The S3 bucket is private (no public access). On every API response, src/utils/s3Presign.ts
+  extracts the object key from filePath and calls GetObjectCommand via @aws-sdk/s3-request-presigner
+  to generate a pre-signed URL (1-hour expiry). This signed URL is exposed as fileUrl.
+  Clients must use fileUrl, not filePath, to display content.
+- Broadcast Redis cache TTL is capped at 3500s so cached presigned URLs (valid 3600s)
+  never expire while still cached.
+- upload step and scheduling step are intentionally separated:
+    POST /content/upload  → stores file, creates content record (status=PENDING)
+    POST /schedule        → after approval, teacher adds content to the rotation with
+                            a duration and rotationOrder
+
+3. APPROVAL WORKFLOW
+--------------------
+- Teacher uploads → content status defaults to PENDING.
+- Principal sees PENDING list via GET /approval/pending (paginated).
+- Principal sees all content with filters via GET /approval/all.
+- PATCH /approval/:id/approve → sets status=APPROVED, approvedById, approvedAt.
+  Also invalidates the Redis broadcast cache for that teacher.
+- PATCH /approval/:id/reject → sets status=REJECTED, stores rejectionReason (required).
+  Also invalidates Redis broadcast cache for that teacher.
+- Approving already-APPROVED or rejecting already-REJECTED content returns 400.
+- Teachers can only see their own content; principals see all content.
+- Rejection reason is exposed to the teacher on GET /content/:id.
+
+4. SCHEDULING ALGORITHM (broadcast.service.ts)
+----------------------------------------------
+Each APPROVED content item can be added to a ContentSchedule with a duration (minutes)
+and rotationOrder. Multiple items share a ContentSlot keyed by subject (one slot per subject).
+
+The broadcast algorithm runs on every GET /content/live/:teacherId request:
+
+  Step 1: Fetch all APPROVED content for the given teacherId that has:
+          - a ContentSchedule row (scheduled by teacher)
+          - startTime <= now AND endTime >= now
+          Content with null startTime or null endTime is NEVER shown.
+          Teachers must specify a validity window; no window = not active.
+
+  Step 2: If the result set is empty → return null (no 404; broadcast is simply empty).
+
+  Step 3: Sort items by rotationOrder ASC.
+
+  Step 4: totalCycleSec = sum of all items' (duration * 60).
+
+  Step 5: nowSec = Math.floor(Date.now() / 1000).
+
+  Step 6: cyclePos = nowSec % totalCycleSec  ← position within the current cycle.
+
+  Step 7: Walk items accumulating durations (in seconds).
+          Return the item where cyclePos first falls within its accumulated window.
+
+  Step 8: secondsRemaining = (accumulatedSoFar + item.duration*60) - cyclePos.
+          This is returned in the response so clients know exactly when to re-poll.
+
+Example — 3 items: A=5min, B=10min, C=5min → total cycle = 20 min = 1200s
+  cyclePos=0   → A is active, secondsRemaining=300
+  cyclePos=300 → B is active, secondsRemaining=600
+  cyclePos=900 → C is active, secondsRemaining=300
+  cyclePos=1200 → wraps back to A
+
+Redis cache TTL is set to secondsRemaining, so the cached value expires at the exact
+moment the rotation advances — no stale data served, no unnecessary DB queries.
+
+Subject filtering: GET /content/live/:teacherId/:subject filters the result set to
+items whose content.subject matches, then runs the same algorithm on that subset.
+
+5. DATABASE DESIGN CHOICES
+--------------------------
+- UUIDs as PKs: avoids sequential ID enumeration attacks.
+- content.startTime / endTime: nullable on the content row itself. Content without these
+  is never shown in broadcast — teachers explicitly opt content into a visibility window.
+- ContentSlot: normalizes the subject-keyed slot concept. One slot per subject enforced
+  by @unique on subject. Auto-created by the schedule service on first use.
+- ContentSchedule: join table with rotationOrder and duration. The @unique on content_id
+  ensures one content item cannot appear in multiple rotation slots simultaneously.
+  onDelete: Cascade means deleting content automatically removes its schedule entry.
+- Composite indexes: (subject, status) and (uploadedById, status) — the two most common
+  filter patterns on the content table, covering broadcast and teacher dashboard queries.
+- snake_case columns in DB via @@map / @map; Prisma handles camelCase in application code.
+
+6. FOLDER STRUCTURE RATIONALE
+------------------------------
+src/
+├── config/       — side-effect-free config loaders (env, database, redis, multer)
+│                   env.ts validates required vars at startup; missing vars throw immediately
+├── modules/      — one folder per domain (auth, content, approval, schedule, broadcast)
+│   └── *.routes.ts      → attaches middleware chain, delegates to controller
+│   └── *.controller.ts  → parses req, calls service, sends ApiResponse
+│   └── *.service.ts     → all business logic, throws ApiError on failure
+│   └── *.repository.ts  → only Prisma calls, extends BaseRepository<Model>
+├── middlewares/  — cross-cutting concerns (auth, validate, upload, error, rateLimit)
+├── utils/        — shared primitives (ApiError, ApiResponse, BaseRepository, logger,
+│                   asyncHandler, bcrypt, jwt)
+├── routes/       — central aggregator mounts all module routers under /api/v1
+└── docs/         — Swagger spec (swagger-jsdoc); UI served at /api/v1/docs
+
+BaseRepository<T> (src/utils/BaseRepository.ts) provides generic Prisma wrappers:
+create, findById, findOne, findMany, update, delete, count, paginate.
+All repositories extend it and add only domain-specific queries on top.
+
+7. MIDDLEWARE CHAIN (per request)
+----------------------------------
+Incoming → helmet → cors → globalRateLimit → morgan → json parser → urlencoded parser
+         → route handler:
+             [protected routes] authenticate → authorize → validate(schema) → controller
+             [upload routes]    authenticate → authorize → validate → uploadSingle → controller
+             [public routes]    controller directly
+         → service → repository → Prisma → DB
+         → ApiResponse.ok() / ApiError thrown → asyncHandler → errorHandler
+
+errorHandler (4-arg Express signature):
+  - multer LIMIT_FILE_SIZE → 400
+  - ApiError instances → err.statusCode, err.errors[] (Zod field errors if present)
+  - anything else → 500 "Internal server error" (stack never leaked to client)
+  - all errors logged via Winston with method, path, message, stack
+
+8. SCALABILITY APPROACH
+------------------------
+Redis caching (already implemented):
+  - Broadcast results (GET /content/live/:teacherId) cached in Redis.
+  - Cache key: "live:<teacherId>" or "live:<teacherId>:<subject>".
+  - TTL = secondsRemaining — cache expires exactly when the active slot ends.
+  - Cache invalidated on approve or reject (approval.service.ts).
+  - Redis is optional: if REDIS_URL is not set, redis client is null and all cache
+    operations are no-ops. On connection error Redis is nulled out with a warning —
+    the server degrades to uncached DB queries without crashing.
+
+Rate limiting (already implemented):
+  - globalRateLimit: 100 req / 15 min window on all routes.
+  - authRateLimit: 20 req / 15 min on POST /auth/register and POST /auth/login.
+  - Both limits configurable via RATE_LIMIT_WINDOW_MS and RATE_LIMIT_MAX env vars.
+
+S3 file storage (already implemented):
+  - multer-s3 streams uploads directly to S3; no server disk I/O.
+  - filePath column stores the private S3 object URL. Content is served via pre-signed URLs
+    generated at request time (src/utils/s3Presign.ts, 1-hour expiry). Bucket has no public access.
+  - Add S3 lifecycle rules to transition old content to Glacier for cost management.
+
+Queue for async notifications (future):
+  - BullMQ / Redis Streams for async teacher notifications on approval/rejection.
+  - Decouples email/push delivery from the approval HTTP response.
+
+Horizontal scaling:
+  - All state in PostgreSQL + Redis (zero in-process state).
+  - JWT is stateless — no session store needed.
+  - Use Neon serverless pooling (pgBouncer) for connection multiplexing under load.
+  - Any number of Node instances can run behind a load balancer.
+
+9. ENVIRONMENT VARIABLE VALIDATION
+------------------------------------
+src/config/env.ts validates all required vars at process startup using two helpers:
+  required(name)         — throws with a clear message if the var is missing or empty
+  optional(name, default) — returns the var or a typed fallback
+
+Required vars: DATABASE_URL, JWT_SECRET, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+               AWS_REGION, AWS_S3_BUCKET.
+
+The server refuses to start with a descriptive error rather than failing at the first
+DB call or S3 request at runtime.
