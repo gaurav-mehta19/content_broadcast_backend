@@ -5,7 +5,6 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import bcrypt from 'bcryptjs';
 import { readFileSync, statSync } from 'fs';
 import path from 'path';
-import os from 'os';
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const db = new PrismaClient({ adapter });
@@ -21,13 +20,13 @@ const s3 = new S3Client({
 const BUCKET = process.env.AWS_S3_BUCKET!;
 const REGION = process.env.AWS_REGION!;
 
-const DESKTOP = path.join(os.homedir(), 'Desktop');
+const SEEDS_DIR = path.join(path.dirname(decodeURIComponent(new URL(import.meta.url).pathname)), 'seeds');
 const SEED_IMAGES: Record<string, string> = {
-  maths:     path.join(DESKTOP, 'Screenshot 2026-04-27 at 10.53.19 PM.png'),
-  science:   path.join(DESKTOP, 'Screenshot 2026-04-27 at 10.53.30 PM.png'),
-  english:   path.join(DESKTOP, 'Screenshot 2026-04-27 at 10.53.42 PM.png'),
-  geography: path.join(DESKTOP, 'Screenshot 2026-04-27 at 10.53.51 PM.png'),
-  history:   path.join(DESKTOP, 'Screenshot 2026-04-27 at 10.54.00 PM.png'),
+  maths:     path.join(SEEDS_DIR, 'maths.png'),
+  science:   path.join(SEEDS_DIR, 'science.png'),
+  english:   path.join(SEEDS_DIR, 'english.png'),
+  geography: path.join(SEEDS_DIR, 'geography.png'),
+  history:   path.join(SEEDS_DIR, 'history.png'),
 };
 
 async function uploadToS3(localPath: string, s3Key: string): Promise<{ url: string; size: number }> {
