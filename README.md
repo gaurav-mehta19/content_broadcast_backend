@@ -199,9 +199,17 @@ Approved content is only broadcast if:
 
 ## Deployment Notes
 
-1. **Database**: Use the Neon pooler URL for `DATABASE_URL` in production for connection multiplexing.
+1. **Database**: Use the Neon URL for `DATABASE_URL` in production for connection.
 2. **Files**: S3 is the storage backend. The `filePath` column stores the private S3 key URL; all API responses expose `fileUrl` as a pre-signed URL (1-hour expiry) generated at request time — no public bucket access required.
 3. **Environment**: Set `NODE_ENV=production` — disables debug logs, reduces Winston verbosity.
 4. **Process manager**: Use PM2 or a Docker container for process supervision.
 5. **Reverse proxy**: Put Nginx in front; forward `/api` to Node on port 5001.
 6. **Redis**: Provide `REDIS_URL` to enable broadcast caching (strongly recommended in production).
+
+---
+
+## Frontend
+
+For easy understanding, a frontend for this backend has been created.
+- **GitHub Repository**: `https://github.com/gaurav-mehta19/broadcast_frontend`
+- **Deployed URL**: `https://exquisite-crepe-0a0919.netlify.app`
